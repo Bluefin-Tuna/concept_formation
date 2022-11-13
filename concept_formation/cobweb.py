@@ -152,17 +152,15 @@ class CobwebTree(object):
         current = self.root
 
         while current:
-
-            print(current.count)
             # the current.count == 0 here is for the initially empty tree.
             if not current.children and (current.is_exact_match(instance) or
                                          current.count == 0):
-                print("leaf match")
+                # print("leaf match")
                 current.increment_counts(instance)
                 break
 
             elif not current.children:
-                print("fringe split")
+                # print("fringe split")
                 new = current.__class__(current)
                 current.parent = new
                 new.children.append(current)
@@ -182,7 +180,7 @@ class CobwebTree(object):
                 _, best_action = current.get_best_operation(instance, best1,
                                                             best2, best1_cu)
 
-                print(best_action)
+                # print(best_action)
                 if best_action == 'best':
                     current.increment_counts(instance)
                     current = best1
@@ -359,14 +357,6 @@ class CobwebNode(object):
             if instance[attr] not in self.av_counts[attr]:
                 self.av_counts[attr][instance[attr]] = 0
             self.av_counts[attr][instance[attr]] += 1
-
-    def decrement_counts(self, instance):
-
-        self.count -= 1
-        for attr in instance:
-            self.av_counts[attr][instance[attr]] -= 1
-            if(self.av_counts[attr][instance[attr]] == 0):
-                del self.av_counts[attr][instance[attr]]
 
     def update_counts_from_node(self, node):
         """
@@ -607,20 +597,19 @@ class CobwebNode(object):
         :return: The value of the constant used to relativize the CU.
         :rtype: float
         """
-
-        self.increment_counts(instance)
-        ec_root_u = self.expected_correct_guesses()
-        self.decrement_counts(instance)
+        temp = self.shallow_copy()
+        temp.increment_counts(instance)
+        ec_root_u = temp.expected_correct_guesses()
 
         const = 0
         for c in self.children:
             const += ((c.count / (self.count + 1)) *
                       c.expected_correct_guesses())
-        
+
         const -= ec_root_u
         const /= len(self.children)
         return const
-    
+
     def relative_cu_for_insert(self, child, instance):
         """
         Computes a relative CU score for each insert operation. The relative CU
@@ -670,29 +659,10 @@ class CobwebNode(object):
         :return: the category utility of adding the instance to the given node
         :rtype: float
         """
-
         temp = child.shallow_copy()
-        # print(self.count, child.count, temp.count)
         temp.increment_counts(instance)
-
         return ((child.count + 1) * temp.expected_correct_guesses() -
                 child.count * child.expected_correct_guesses())
-        
-        # s = self.count
-        # c1 = child.count
-        # o = child.count * child.expected_correct_guesses()
-        # child.increment_counts(instance)
-        # c2 = child.count
-        # o = (child.count * child.expected_correct_guesses()) - o
-        # child.decrement_counts(instance)
-        # if(self.count - s != 0 or c2 - c1 != 1 or child.count - c1 != 0 or c2 - child.count != 1):
-        #     print("Discrepansy Found")
-
-        # return o
-
-
-
-
 
     def cu_for_insert(self, child, instance):
         """
@@ -746,10 +716,6 @@ class CobwebNode(object):
         new_child.increment_counts(instance)
         self.children.append(new_child)
         return new_child
-    
-    def delete_new_child(self, child):
-
-        self.children = [c for c in self.children if c != child] 
 
     def create_child_with_current_counts(self):
         """
@@ -785,14 +751,15 @@ class CobwebNode(object):
 
         .. seealso:: :meth:`CobwebNode.get_best_operation`
         """
+        temp = self.shallow_copy()
+        for c in self.children:
+            temp.children.append(c.shallow_copy())
 
-        self.increment_counts(instance)
-        new_child = self.create_new_child(instance)
-        out = self.category_utility()
-        self.decrement_counts(instance)
-        self.delete_new_child(new_child)
+        # temp = self.shallow_copy()
 
-        return out
+        temp.increment_counts(instance)
+        temp.create_new_child(instance)
+        return temp.category_utility()
 
     def merge(self, best1, best2):
         """
@@ -869,29 +836,6 @@ class CobwebNode(object):
             temp.children.append(temp_child)
 
         return temp.category_utility()
-
-        # new_child = self.__class__()
-        # new_child.tree = self.tree
-
-        # self.increment_counts(instance)
-
-        # new_child.parent = self
-        # new_child.update_counts_from_node(best1)
-        # new_child.update_counts_from_node(best2)
-        # new_child.increment_counts(instance)
-
-        # self.children.append(new_child)
-
-        # self.delete_new_child(best1)
-        # self.delete_new_child(best2)
-        
-        # out = self.category_utility()
-        # self.children.append(best1)
-        # self.children.append(best2)
-        # self.decrement_counts(instance)
-        # self.delete_new_child(new_child)
-
-        return out
 
     def split(self, best):
         """
