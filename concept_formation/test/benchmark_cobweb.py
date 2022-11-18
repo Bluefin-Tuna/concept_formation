@@ -52,25 +52,35 @@ def time(n_inst, n_attr, n_val):
 
 if __name__ == "__main__":
     # 5 attributes
-    sizes = [10, 30, 60, 120, 180, 220]
-    times = [time(i, 5, 5) for i in sizes]
+    sizes = [2000, 4000, 6000, 8000, 10000]
+    times = [time(i, 10, 5) for i in sizes]
     plt.plot(sizes, times, 'ro')
     plt.plot(sizes, times, 'r-')
 
     # 10 attributes
-    times = [time(i, 10, 5) for i in sizes]
+    times = [time(i, 20, 5) for i in sizes]
     plt.plot(sizes, times, 'bo')
     plt.plot(sizes, times, 'b-')
 
     # 20 attributes
-    times = [time(i, 10, 5) for i in sizes]
+    times = [time(i, 40, 5) for i in sizes]
     plt.plot(sizes, times, 'go')
     plt.plot(sizes, times, 'g-')
 
-    red_patch = mpatches.Patch(color='red', label='# attr=5')
-    blue_patch = mpatches.Patch(color='blue', label='# attr=10')
-    green_patch = mpatches.Patch(color='green', label='# attr=20')
-    plt.legend(handles=[red_patch, blue_patch, green_patch], loc=2)
+    times = [time(i, 80, 5) for i in sizes]
+    plt.plot(sizes, times, 'ko')
+    plt.plot(sizes, times, 'k-')
+
+    times = [time(i, 1600, 5) for i in sizes]
+    plt.plot(sizes, times, 'yo')
+    plt.plot(sizes, times, 'y-')
+
+    red_patch = mpatches.Patch(color='red', label='# attr=10')
+    blue_patch = mpatches.Patch(color='blue', label='# attr=20')
+    green_patch = mpatches.Patch(color='green', label='# attr=40')
+    black_patch = mpatches.Patch(color='black', label='# attr=80')
+    yellow_patch = mpatches.Patch(color='yellow', label='# attr=160')
+    plt.legend(handles=[red_patch, blue_patch, green_patch, black_patch, yellow_patch], loc=2)
 
     plt.xlabel('Number of training instances (5 possible values / attr)')
     plt.ylabel('Runtime in Seconds')
