@@ -2,14 +2,12 @@
 The Cobweb module contains the :class:`CobwebTree` and :class:`CobwebNode`
 classes which are used to achieve the basic Cobweb functionality.
 """
-
-from __future__ import print_function
-from __future__ import unicode_literals
-from __future__ import absolute_import
-from __future__ import division
 from random import shuffle
 from random import random
 from math import log
+from math import isclose
+from collections import defaultdict
+from collections import Counter
 
 from concept_formation.utils import weighted_choice
 from concept_formation.utils import most_likely_choice
@@ -298,7 +296,9 @@ class CobwebNode(object):
         """Create a new CobwebNode"""
         self.concept_id = self.gensym()
         self.count = 0.0
-        self.av_counts = {}
+        self.squared_counts = 0.0
+        self.attr_count = 0.0
+        self.av_counts = defaultdict(Counter)
         self.children = []
         self.parent = None
         self.tree = None
@@ -326,22 +326,6 @@ class CobwebNode(object):
         temp.update_counts_from_node(self)
         return temp
 
-    def attrs(self, attr_filter=None):
-        """
-        Iterates over the attributes present in the node's attribute-value
-        table with the option to filter certain types. By default the filter
-        will ignore hidden attributes and yield all others. If the string 'all'
-        is provided then all attributes will be yielded. In neither of those
-        cases the filter will be interpreted as a function that returns true if
-        an attribute should be yielded and false otherwise.
-        """
-        if attr_filter is None:
-            return filter(lambda x: x[0] != "_", self.av_counts)
-        elif attr_filter == 'all':
-            return self.av_counts
-        else:
-            return filter(attr_filter, self.av_counts)
-
     def increment_counts(self, instance):
         """
         Increment the counts at the current node according to the specified
@@ -352,11 +336,46 @@ class CobwebNode(object):
         """
         self.count += 1
         for attr in instance:
-            if attr not in self.av_counts:
-                self.av_counts[attr] = {}
-            if instance[attr] not in self.av_counts[attr]:
-                self.av_counts[attr][instance[attr]] = 0
-            self.av_counts[attr][instance[attr]] += 1
+            val = instance[attr]
+            hidden = attr[0] == "_"
+
+            if not hidden and attr not in self.av_counts:
+                self.attr_count += 1
+
+            if not hidden:
+                self.squared_counts -= self.av_counts[attr][val]**2
+
+            self.av_counts[attr][val] += 1
+
+            if not hidden:
+                self.squared_counts += self.av_counts[attr][val]**2
+
+    def decrement_counts(self, instance):
+        """
+        Decrement the counts at the current node according to the specified
+        instance. This is the inverse of increment counts and is used to
+        evaluate the CU for different operations.
+
+        :param instance: An instance to remove from the node counts.
+        :type instance: :ref:`Instance<instance-rep>`
+        """
+        self.count -= 1
+        for attr in instance:
+            val = instance[attr]
+            hidden = attr[0] == "_"
+
+            if not hidden:
+                self.squared_counts -= self.av_counts[attr][val]**2
+
+            self.av_counts[attr][val] -= 1
+
+            if(self.av_counts[attr][val] == 0):
+                del self.av_counts[attr][instance[attr]]
+                if len(self.av_counts[attr]) == 0:
+                    del self.av_counts[attr]
+
+            elif not hidden:
+                self.squared_counts += self.av_counts[attr][val]**2
 
     def update_counts_from_node(self, node):
         """
@@ -369,13 +388,89 @@ class CobwebNode(object):
         :type node: CobwebNode
         """
         self.count += node.count
-        for attr in node.attrs('all'):
-            if attr not in self.av_counts:
-                self.av_counts[attr] = {}
+        for attr in node.av_counts:
+            hidden = attr[0] == "_"
+
+            if not hidden and attr not in self.av_counts:
+                self.attr_count += 1
+
             for val in node.av_counts[attr]:
-                if val not in self.av_counts[attr]:
-                    self.av_counts[attr][val] = 0
+                if not hidden:
+                    self.squared_counts -= self.av_counts[attr][val]**2
+
                 self.av_counts[attr][val] += node.av_counts[attr][val]
+
+                if not hidden:
+                    self.squared_counts += self.av_counts[attr][val]**2
+
+    def expected_correct_guesses_insert(self, instance):
+        """
+        Returns the expected correct guesses that would result from inserting
+        the instance into the current node. 
+
+        This operation can be used instead of inplace and copying because it
+        only looks at the attr values used in the instance and reduces iteration.
+        """
+
+        attr_count = self.attr_count
+        squared_counts = self.squared_counts
+
+        for attr in instance:
+            if attr[0] == "_":
+                continue
+
+            if attr not in self.av_counts:
+                attr_count += 1
+
+            val = instance[attr]
+            squared_counts -= self.av_counts[attr][val]**2
+            squared_counts += (self.av_counts[attr][val]+1)**2
+
+        return squared_counts / (self.count+1)**2 / attr_count
+
+    def expected_correct_guesses_merge(self, other, instance):
+        """
+        Returns the expected correct guesses that would result from merging the
+        current concept with the other concept and inserting the instance.
+
+        This operation can be used instead of inplace and copying because it
+        only looks at the attr values used in the instance and reduces iteration.
+        """
+        # use the larger concept as the base
+        big = self
+        small = other
+
+        if self.count < other.count:
+            small = self
+            big = other
+
+        attr_count = big.attr_count
+        squared_counts = big.squared_counts
+
+        for attr in small.av_counts:
+            if attr[0] == "_":
+                continue
+
+            if attr not in big.av_counts:
+                attr_count += 1
+
+            for val in small.av_counts[attr]:
+                squared_counts -= big.av_counts[attr][val]**2
+                squared_counts += (big.av_counts[attr][val]+small.av_counts[attr][val])**2
+
+        for attr in instance:
+            if attr[0] == "_":
+                continue
+
+            if attr not in big.av_counts and attr not in small.av_counts:
+                attr_count += 1
+
+            val = instance[attr]
+            squared_counts -= (big.av_counts[attr][val]+small.av_counts[attr][val])**2
+            squared_counts += (big.av_counts[attr][val]+small.av_counts[attr][val]+1)**2
+
+        return squared_counts / (big.count + small.count + 1)**2 / attr_count
+
 
     def expected_correct_guesses(self):
         """
@@ -389,17 +484,7 @@ class CobwebNode(object):
                  concept.
         :rtype: float
         """
-        correct_guesses = 0.0
-        attr_count = 0
-
-        for attr in self.attrs():
-            attr_count += 1
-            if attr in self.av_counts:
-                for val in self.av_counts[attr]:
-                    prob = (self.av_counts[attr][val]) / self.count
-                    correct_guesses += (prob * prob)
-
-        return correct_guesses / attr_count
+        return self.squared_counts / self.count**2 / self.attr_count
 
     def category_utility(self):
         """
@@ -553,6 +638,70 @@ class CobwebNode(object):
         if len(self.children) == 0:
             raise Exception("No children!")
 
+        relative_cus = [(((child.count + 1) * child.expected_correct_guesses_insert(instance)) - 
+                          (child.count * child.expected_correct_guesses()),
+                         child.count, random(), child, i) for i, child in
+                        enumerate(self.children)]
+        relative_cus.sort(reverse=True)
+
+        best1 = relative_cus[0][3]
+        best1_cu = self.cu_for_insert(best1, instance)
+
+        best2 = None
+        if len(relative_cus) > 1:
+            best2 = relative_cus[1][3]
+
+        return best1_cu, best1, best2
+
+    def two_best_children_old(self, instance):
+        """
+        Calculates the category utility of inserting the instance into each of
+        this node's children and returns the best two. In the event of ties
+        children are sorted first by category utility, then by their size, then
+        by a random value.
+
+        :param instance: The instance currently being categorized
+        :type instance: :ref:`Instance<instance-rep>`
+        :return: the category utility and indices for the two best children
+            (the second tuple will be ``None`` if there is only 1 child).
+        :rtype: ((cu_best1,index_best1),(cu_best2,index_best2))
+        """
+        if len(self.children) == 0:
+            raise Exception("No children!")
+
+        children_cu = [(self.cu_for_insert(child, instance),
+                                 child.count, random(), child) for child in
+                                self.children]
+        children_cu.sort(reverse=True)
+
+        # Convert the relative CU's of the two best children into CU scores
+        # that can be compared with the other operations.
+
+        best1 = children_cu[0][3]
+        best1_cu = children_cu[0][0]
+
+        best2 = None
+        if len(children_cu) > 1:
+            best2 = children_cu[1][3]
+
+        return best1_cu, best1, best2
+        
+    def two_best_children_relative(self, instance):
+        """
+        Calculates the category utility of inserting the instance into each of
+        this node's children and returns the best two. In the event of ties
+        children are sorted first by category utility, then by their size, then
+        by a random value.
+
+        :param instance: The instance currently being categorized
+        :type instance: :ref:`Instance<instance-rep>`
+        :return: the category utility and indices for the two best children
+            (the second tuple will be ``None`` if there is only 1 child).
+        :rtype: ((cu_best1,index_best1),(cu_best2,index_best2))
+        """
+        if len(self.children) == 0:
+            raise Exception("No children!")
+
         children_relative_cu = [(self.relative_cu_for_insert(child, instance),
                                  child.count, random(), child) for child in
                                 self.children]
@@ -686,16 +835,20 @@ class CobwebNode(object):
             :meth:`CobwebNode.get_best_operation`
 
         """
-        temp = self.shallow_copy()
-        temp.increment_counts(instance)
+        child_correct_guesses = 0.0
 
         for c in self.children:
-            temp_child = c.shallow_copy()
-            temp.children.append(temp_child)
-            temp_child.parent = temp
             if c == child:
-                temp_child.increment_counts(instance)
-        return temp.category_utility()
+                child_correct_guesses += ((c.count+1) *
+                                          c.expected_correct_guesses_insert(instance))
+            else:
+                child_correct_guesses += (c.count *
+                                          c.expected_correct_guesses())
+
+        child_correct_guesses /= (self.count + 1)
+        parent_correct_guesses = self.expected_correct_guesses_insert(instance)
+
+        return ((child_correct_guesses - parent_correct_guesses) / len(self.children))
 
     def create_new_child(self, instance):
         """
@@ -751,15 +904,19 @@ class CobwebNode(object):
 
         .. seealso:: :meth:`CobwebNode.get_best_operation`
         """
-        temp = self.shallow_copy()
+        child_correct_guesses = 0.0
+
         for c in self.children:
-            temp.children.append(c.shallow_copy())
+            child_correct_guesses += (c.count * c.expected_correct_guesses())
 
-        # temp = self.shallow_copy()
+        # sum over all attr (at 100% prob) divided by num attr should be 1.
+        child_correct_guesses += 1
 
-        temp.increment_counts(instance)
-        temp.create_new_child(instance)
-        return temp.category_utility()
+        child_correct_guesses /= (self.count + 1)
+        parent_correct_guesses = self.expected_correct_guesses_insert(instance)
+
+        return ((child_correct_guesses - parent_correct_guesses) / (len(self.children)+1))
+
 
     def merge(self, best1, best2):
         """
@@ -785,9 +942,7 @@ class CobwebNode(object):
         new_child.update_counts_from_node(best1)
         new_child.update_counts_from_node(best2)
         best1.parent = new_child
-        # best1.tree = new_child.tree
         best2.parent = new_child
-        # best2.tree = new_child.tree
         new_child.children.append(best1)
         new_child.children.append(best2)
         self.children.remove(best1)
@@ -818,24 +973,23 @@ class CobwebNode(object):
 
         .. seealso:: :meth:`CobwebNode.get_best_operation`
         """
-        temp = self.shallow_copy()
-        temp.increment_counts(instance)
-
-        new_child = self.__class__()
-        new_child.tree = self.tree
-        new_child.parent = temp
-        new_child.update_counts_from_node(best1)
-        new_child.update_counts_from_node(best2)
-        new_child.increment_counts(instance)
-        temp.children.append(new_child)
+        child_correct_guesses = 0.0
 
         for c in self.children:
             if c == best1 or c == best2:
                 continue
-            temp_child = c.shallow_copy()
-            temp.children.append(temp_child)
 
-        return temp.category_utility()
+            child_correct_guesses += (c.count *
+                                      c.expected_correct_guesses())
+
+        child_correct_guesses += ((best1.count + best2.count + 1) *
+                                  best1.expected_correct_guesses_merge(best2, instance))
+
+        child_correct_guesses /= (self.count + 1)
+        parent_correct_guesses = self.expected_correct_guesses_insert(instance)
+
+        return ((child_correct_guesses - parent_correct_guesses) / (len(self.children)-1))
+    
 
     def split(self, best):
         """
@@ -855,33 +1009,6 @@ class CobwebNode(object):
             child.tree = self.tree
             self.children.append(child)
 
-    def cu_for_fringe_split(self, instance):
-        """
-        Return the category utility of performing a fringe split (i.e.,
-        adding a leaf to a leaf).
-
-        A "fringe split" is essentially a new operation performed at a leaf. It
-        is necessary to have the distinction because unlike a normal split a
-        fringe split must also push the parent down to maintain a proper tree
-        structure. This is useful for identifying unnecessary fringe splits,
-        when the two leaves are essentially identical. It can be used to keep
-        the tree from growing and to increase the tree's predictive accuracy.
-
-        :param instance: The instance currently being categorized
-        :type instance: :ref:`Instance<instance-rep>`
-        :return: the category utility of fringe splitting at the current node.
-        :rtype: float
-
-        .. seealso:: :meth:`CobwebNode.get_best_operation`
-        """
-        temp = self.shallow_copy()
-
-        temp.create_child_with_current_counts()
-        temp.increment_counts(instance)
-        temp.create_new_child(instance)
-
-        return temp.category_utility()
-
     def cu_for_split(self, best):
         """
         Return the category utility for splitting the best child.
@@ -900,15 +1027,21 @@ class CobwebNode(object):
 
         .. seealso:: :meth:`CobwebNode.get_best_operation`
         """
-        temp = self.shallow_copy()
+        child_correct_guesses = 0.0
 
-        for c in self.children + best.children:
+        for c in self.children:
             if c == best:
                 continue
-            temp_child = c.shallow_copy()
-            temp.children.append(temp_child)
+            child_correct_guesses += (c.count * c.expected_correct_guesses())
 
-        return temp.category_utility()
+        for c in best.children:
+            child_correct_guesses += (c.count * c.expected_correct_guesses())
+
+        child_correct_guesses /= self.count
+        parent_correct_guesses = self.expected_correct_guesses()
+
+        return ((child_correct_guesses - parent_correct_guesses) /
+                (len(self.children) - 1 + len(best.children)))
 
     def is_exact_match(self, instance):
         """
@@ -921,7 +1054,7 @@ class CobwebNode(object):
 
         .. seealso:: :meth:`CobwebNode.get_best_operation`
         """
-        for attr in set(instance).union(set(self.attrs())):
+        for attr in set(instance).union(set(self.av_counts)):
             if attr[0] == '_':
                 continue
             if attr in instance and attr not in self.av_counts:
@@ -953,7 +1086,6 @@ class CobwebNode(object):
         """
         self.__class__._counter += 1
         return self.__class__._counter
-        # return str(self.__class__._counter)
 
     def __str__(self):
         """
@@ -974,7 +1106,6 @@ class CobwebNode(object):
         :return: a formated string displaying the tree and its children
         :rtype: str
         """
-
         ret = str(('\t' * depth) + "|-" + str(self.av_counts) + ":" +
                   str(self.count) + '\n')
 
@@ -990,7 +1121,6 @@ class CobwebNode(object):
         :return: the depth of the current node in its tree
         :rtype: int
         """
-
         if self.parent:
             return 1 + self.parent.depth()
         return 0
@@ -1044,11 +1174,10 @@ class CobwebNode(object):
         output['children'] = []
 
         temp = {}
-        for attr in self.attrs('all'):
+        for attr in self.av_counts:
             for value in self.av_counts[attr]:
                 temp[str(attr)] = {str(value): self.av_counts[attr][value] for
                                    value in self.av_counts[attr]}
-                # temp[attr + " = " + str(value)] = self.av_counts[attr][value]
 
         for child in self.children:
             output["children"].append(child.output_json())
@@ -1163,7 +1292,9 @@ class CobwebNode(object):
         """
         ll = 0
 
-        for attr in set(self.attrs()).union(set(child_leaf.attrs())):
+        for attr in set(self.av_counts).union(set(child_leaf.av_counts)):
+            if attr[0] == "_":
+                continue
             vals = set([None])
             if attr in self.av_counts:
                 vals.update(self.av_counts[attr])
